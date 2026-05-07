@@ -29,6 +29,8 @@
 
 // WIRE_HAS_END means Wire has end()
 #define WIRE_HAS_END 1
+// WIRE_HAS_TIMEOUT means Wire has setWireTimeout(), getWireTimeoutFlag(), clearWireTimeoutFlag()
+#define WIRE_HAS_TIMEOUT 1
 
 class TwoWire : public Stream
 {
@@ -39,6 +41,11 @@ class TwoWire : public Stream
     void end();
     void setClock(uint32_t);
     void setPins(uint8_t pinSDA, uint8_t pinSCL);
+
+    void setWireTimeout(uint32_t timeout, bool reset_on_timeout);
+    void setWireTimeout(uint32_t timeout);
+    bool getWireTimeoutFlag();
+    void clearWireTimeoutFlag();
 
     void beginTransmission(uint8_t);
     uint8_t endTransmission(bool stopBit);
@@ -77,6 +84,10 @@ class TwoWire : public Stream
 
     uint8_t _uc_pinSDA;
     uint8_t _uc_pinSCL;
+
+    uint32_t _wire_timeout;
+    bool _wire_timeout_flag;
+    bool _wire_timeout_reset_on_timeout;
 
     bool master;
     bool receiving;

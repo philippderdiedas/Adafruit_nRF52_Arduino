@@ -135,6 +135,28 @@ void TwoWire::setPins(uint8_t pinSDA, uint8_t pinSCL)
     this->_uc_pinSCL = g_ADigitalPinMap[pinSCL];
 }
 
+void TwoWire::setWireTimeout(uint32_t timeout, bool reset_on_timeout)
+{
+    this->_wire_timeout = timeout;
+    this->_wire_timeout_reset_on_timeout = reset_on_timeout;
+}
+
+void TwoWire::setWireTimeout(uint32_t timeout)
+{
+    setWireTimeout(timeout, false);
+    clearWireTimeoutFlag();
+}
+
+void TwoWire::clearWireTimeoutFlag()
+{
+    this->_wire_timeout_flag = false;
+}
+
+bool TwoWire::getWireTimeoutFlag()
+{
+  return this->_wire_timeout_flag;
+}
+
 void TwoWire::end() {
   if (master)
   {
@@ -163,22 +185,62 @@ uint8_t TwoWire::requestFrom(uint8_t address, size_t quantity, bool stopBit)
   _p_twim->RXD.MAXCNT = quantity;
   _p_twim->TASKS_STARTRX = 0x1UL;
 
-  while(!_p_twim->EVENTS_RXSTARTED && !_p_twim->EVENTS_ERROR);
+  unsigned long start = micros();
+  while(!_p_twim->EVENTS_RXSTARTED && !_p_twim->EVENTS_ERROR) {
+    if (this->_wire_timeout && (unsigned long)(micros() - start) >= this->_wire_timeout) {
+      this->_wire_timeout_flag = true;
+      if (this->_wire_timeout_reset_on_timeout) {
+        _p_twim->TASKS_STOP = 0x1UL;
+        unsigned long s2 = micros();
+        while(!_p_twim->EVENTS_STOPPED && (unsigned long)(micros() - s2) < 1000UL);
+        _p_twim->EVENTS_STOPPED = 0x0UL;
+      }
+      _p_twim->EVENTS_ERROR = 0x0UL;
+      rxBuffer._iHead = _p_twim->RXD.AMOUNT;
+      return rxBuffer._iHead;
+    }
+  }
   _p_twim->EVENTS_RXSTARTED = 0x0UL;
 
-  while(!_p_twim->EVENTS_LASTRX && !_p_twim->EVENTS_ERROR);
+  start = micros();
+  while(!_p_twim->EVENTS_LASTRX && !_p_twim->EVENTS_ERROR) {
+    if (this->_wire_timeout && (unsigned long)(micros() - start) >= this->_wire_timeout) {
+      this->_wire_timeout_flag = true;
+      if (this->_wire_timeout_reset_on_timeout) {
+        _p_twim->TASKS_STOP = 0x1UL;
+        unsigned long s2 = micros();
+        while(!_p_twim->EVENTS_STOPPED && (unsigned long)(micros() - s2) < 1000UL);
+        _p_twim->EVENTS_STOPPED = 0x0UL;
+      }
+      _p_twim->EVENTS_ERROR = 0x0UL;
+      rxBuffer._iHead = _p_twim->RXD.AMOUNT;
+      return rxBuffer._iHead;
+    }
+  }
   _p_twim->EVENTS_LASTRX = 0x0UL;
 
   if (stopBit || _p_twim->EVENTS_ERROR)
   {
     _p_twim->TASKS_STOP = 0x1UL;
-    while(!_p_twim->EVENTS_STOPPED);
+    unsigned long startStop = micros();
+    while(!_p_twim->EVENTS_STOPPED) {
+      if (this->_wire_timeout && (unsigned long)(micros() - startStop) >= this->_wire_timeout) {
+        this->_wire_timeout_flag = true;
+        if (!this->_wire_timeout_reset_on_timeout) break;
+      }
+    }
     _p_twim->EVENTS_STOPPED = 0x0UL;
   }
   else
   {
     _p_twim->TASKS_SUSPEND = 0x1UL;
-    while(!_p_twim->EVENTS_SUSPENDED);
+    unsigned long startSusp = micros();
+    while(!_p_twim->EVENTS_SUSPENDED) {
+      if (this->_wire_timeout && (unsigned long)(micros() - startSusp) >= this->_wire_timeout) {
+        this->_wire_timeout_flag = true;
+        if (!this->_wire_timeout_reset_on_timeout) break;
+      }
+    }
     _p_twim->EVENTS_SUSPENDED = 0x0UL;
   }
 
@@ -226,25 +288,54 @@ uint8_t TwoWire::endTransmission(bool stopBit)
   _p_twim->TXD.MAXCNT = txBuffer.available();
 
   _p_twim->TASKS_STARTTX = 0x1UL;
-
-  while(!_p_twim->EVENTS_TXSTARTED && !_p_twim->EVENTS_ERROR);
+  unsigned long start = micros();
+  while(!_p_twim->EVENTS_TXSTARTED && !_p_twim->EVENTS_ERROR) {
+    if (this->_wire_timeout && (unsigned long)(micros() - start) >= this->_wire_timeout) {
+      this->_wire_timeout_flag = true;
+      if (this->_wire_timeout_reset_on_timeout) {
+        _p_twim->TASKS_STOP = 0x1UL;
+      }
+      return 4; // timeout treated as 'other error'
+    }
+  }
   _p_twim->EVENTS_TXSTARTED = 0x0UL;
 
   if (txBuffer.available()) {
-    while(!_p_twim->EVENTS_LASTTX && !_p_twim->EVENTS_ERROR);
+    start = micros();
+    while(!_p_twim->EVENTS_LASTTX && !_p_twim->EVENTS_ERROR) {
+      if (this->_wire_timeout && (unsigned long)(micros() - start) >= this->_wire_timeout) {
+        this->_wire_timeout_flag = true;
+        if (this->_wire_timeout_reset_on_timeout) {
+          _p_twim->TASKS_STOP = 0x1UL;
+        }
+        return 4; // timeout
+      }
+    }
   }
   _p_twim->EVENTS_LASTTX = 0x0UL;
 
   if (stopBit || _p_twim->EVENTS_ERROR)
   {
     _p_twim->TASKS_STOP = 0x1UL;
-    while(!_p_twim->EVENTS_STOPPED);
+    unsigned long startStop = micros();
+    while(!_p_twim->EVENTS_STOPPED) {
+      if (this->_wire_timeout && (unsigned long)(micros() - startStop) >= this->_wire_timeout) {
+        this->_wire_timeout_flag = true;
+        if (!this->_wire_timeout_reset_on_timeout) return 4;
+      }
+    }
     _p_twim->EVENTS_STOPPED = 0x0UL;
   }
   else
   {
     _p_twim->TASKS_SUSPEND = 0x1UL;
-    while(!_p_twim->EVENTS_SUSPENDED);
+    unsigned long startSusp = micros();
+    while(!_p_twim->EVENTS_SUSPENDED) {
+      if (this->_wire_timeout && (unsigned long)(micros() - startSusp) >= this->_wire_timeout) {
+        this->_wire_timeout_flag = true;
+        if (!this->_wire_timeout_reset_on_timeout) return 4;
+      }
+    }
     _p_twim->EVENTS_SUSPENDED = 0x0UL;
   }
 
